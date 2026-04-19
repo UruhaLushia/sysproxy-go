@@ -23,6 +23,10 @@ type serverAddr struct {
 	port string
 }
 
+func Bool(v bool) *bool {
+	return &v
+}
+
 func FormatServer(host, port string) string {
 	host = cleanOutput(host)
 	port = cleanOutput(port)

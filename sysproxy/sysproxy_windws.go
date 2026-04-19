@@ -47,8 +47,8 @@ type (
 	}
 )
 
-func refreshAndApplySettings(options []InternetPerConnOption, device string, onlyActiveDevice bool) error {
-	connectionNames, err := getTargetConnections(device, onlyActiveDevice)
+func refreshAndApplySettings(options []InternetPerConnOption, opt *Options) error {
+	connectionNames, err := getTargetConnections(opt)
 	if err != nil {
 		return err
 	}
@@ -83,40 +83,18 @@ func refreshAndApplySettings(options []InternetPerConnOption, device string, onl
 		return nil
 	}
 
-	workerCount := min(len(connectionNames), 16)
-	if workerCount <= 1 {
-		for _, name := range connectionNames {
-			if err := applyConn(name); err != nil {
-				return err
-			}
+	if resolveConcurrentApply(opt) {
+		if err := applyConcurrent(connectionNames, applyConn); err != nil {
+			return err
 		}
-	} else {
-		jobs := make(chan string, len(connectionNames))
-		errCh := make(chan error, len(connectionNames))
-		var wg sync.WaitGroup
+		procInternetSetOptionW.Call(0, INTERNET_OPTION_PROXY_SETTINGS_CHANGED, 0, 0)
+		procInternetSetOptionW.Call(0, INTERNET_OPTION_REFRESH, 0, 0)
+		return nil
+	}
 
-		for range workerCount {
-			wg.Go(func() {
-				for name := range jobs {
-					if err := applyConn(name); err != nil {
-						errCh <- err
-					}
-				}
-			})
-		}
-
-		for _, name := range connectionNames {
-			jobs <- name
-		}
-		close(jobs)
-
-		wg.Wait()
-		close(errCh)
-
-		for err := range errCh {
-			if err != nil {
-				return err
-			}
+	for _, name := range connectionNames {
+		if err := applyConn(name); err != nil {
+			return err
 		}
 	}
 
@@ -125,12 +103,57 @@ func refreshAndApplySettings(options []InternetPerConnOption, device string, onl
 	return nil
 }
 
-func getTargetConnections(device string, onlyActiveDevice bool) ([]string, error) {
-	if device != "" {
-		return []string{device}, nil
+func applyConcurrent(connectionNames []string, apply func(string) error) error {
+	if len(connectionNames) == 0 {
+		return nil
 	}
 
-	if onlyActiveDevice {
+	workerCount := min(len(connectionNames), 16)
+	if workerCount <= 1 {
+		for _, name := range connectionNames {
+			if err := apply(name); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	jobs := make(chan string, len(connectionNames))
+	errCh := make(chan error, len(connectionNames))
+	var wg sync.WaitGroup
+
+	for range workerCount {
+		wg.Go(func() {
+			for name := range jobs {
+				if err := apply(name); err != nil {
+					errCh <- err
+				}
+			}
+		})
+	}
+
+	for _, name := range connectionNames {
+		jobs <- name
+	}
+	close(jobs)
+
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func getTargetConnections(opt *Options) ([]string, error) {
+	if opt != nil && opt.Device != "" {
+		return []string{opt.Device}, nil
+	}
+	if opt != nil && opt.OnlyActiveDevice {
 		return []string{""}, nil
 	}
 
@@ -143,16 +166,22 @@ func getTargetConnections(device string, onlyActiveDevice bool) ([]string, error
 	return connectionNames, nil
 }
 
-func DisableProxy(device string, onlyActiveDevice bool) error {
+func DisableProxy(opt *Options) error {
 	return refreshAndApplySettings([]InternetPerConnOption{{
 		dwOption: INTERNET_PER_CONN_FLAGS,
 		dwValue:  PROXY_TYPE_DIRECT,
-	}}, device, onlyActiveDevice)
+	}}, opt)
 }
 
-func SetProxy(proxy, bypass, device string, onlyActiveDevice bool) error {
+func SetProxy(opt *Options) error {
+	proxy := ""
+	bypass := ""
+	if opt != nil {
+		proxy = opt.Proxy
+		bypass = opt.Bypass
+	}
 	if proxy == "" || bypass == "" {
-		config, err := QueryProxySettings("", false)
+		config, err := QueryProxySettings(nil)
 		if err != nil {
 			return err
 		}
@@ -177,14 +206,18 @@ func SetProxy(proxy, bypass, device string, onlyActiveDevice bool) error {
 		{dwOption: INTERNET_PER_CONN_FLAGS, dwValue: PROXY_TYPE_PROXY},
 		{dwOption: INTERNET_PER_CONN_PROXY_SERVER, dwValue: uintptr(unsafe.Pointer(proxyPtr))},
 		{dwOption: INTERNET_PER_CONN_PROXY_BYPASS, dwValue: uintptr(unsafe.Pointer(bypassPtr))},
-	}, device, onlyActiveDevice)
+	}, opt)
 }
 
-func SetPac(pacUrl, device string, onlyActiveDevice bool) error {
+func SetPac(opt *Options) error {
+	pacUrl := ""
+	if opt != nil {
+		pacUrl = opt.PACURL
+	}
 	if pacUrl == "" {
 		return refreshAndApplySettings([]InternetPerConnOption{
 			{dwOption: INTERNET_PER_CONN_FLAGS, dwValue: PROXY_TYPE_AUTO_PROXY_URL},
-		}, device, onlyActiveDevice)
+		}, opt)
 	}
 	pacPtr, err := syscall.UTF16PtrFromString(pacUrl)
 	if err != nil {
@@ -194,10 +227,10 @@ func SetPac(pacUrl, device string, onlyActiveDevice bool) error {
 	return refreshAndApplySettings([]InternetPerConnOption{
 		{dwOption: INTERNET_PER_CONN_FLAGS, dwValue: PROXY_TYPE_AUTO_PROXY_URL},
 		{dwOption: INTERNET_PER_CONN_AUTOCONFIG_URL, dwValue: uintptr(unsafe.Pointer(pacPtr))},
-	}, device, onlyActiveDevice)
+	}, opt)
 }
 
-func QueryProxySettings(_ string, _ bool) (*ProxyConfig, error) {
+func QueryProxySettings(_ *Options) (*ProxyConfig, error) {
 	options := [4]InternetPerConnOption{
 		{dwOption: INTERNET_PER_CONN_FLAGS},
 		{dwOption: INTERNET_PER_CONN_PROXY_SERVER},
@@ -245,7 +278,7 @@ func getString(val uintptr) string {
 }
 
 func enumAllConnectionNames() ([]string, error) {
-	key, err := registry.OpenKey(registry.CURRENT_USER, `Software\Microsoft\Windows\CurrentVersion\Internet Settings\Connections`, registry.READ)
+	key, err := openCurrentUserKey(`Software\Microsoft\Windows\CurrentVersion\Internet Settings\Connections`, registry.READ)
 	if err != nil {
 		return nil, err
 	}

@@ -13,20 +13,11 @@ import (
 	"sync"
 )
 
-func DisableProxy(device string, onlyActiveDevice bool) error {
-	var (
-		services []string
-		err      error
-	)
-	if device != "" {
-		services = []string{device}
-	} else {
-		services, err = getNetworkServices(onlyActiveDevice)
-		if err != nil {
-			return err
-		}
+func DisableProxy(opt *Options) error {
+	services, err := getTargetServices(opt)
+	if err != nil {
+		return err
 	}
-
 	commands := [][]string{
 		{"-setautoproxystate", "off"},
 		{"-setproxyautodiscovery", "off"},
@@ -35,35 +26,18 @@ func DisableProxy(device string, onlyActiveDevice bool) error {
 		{"-setsocksfirewallproxystate", "off"},
 	}
 
-	errChan := make(chan error, len(services))
-	var wg sync.WaitGroup
-
-	for _, service := range services {
-		wg.Add(1)
-		go func(svc string) {
-			defer wg.Done()
-			if err := execNetworksetupConcurrent(svc, commands); err != nil {
-				errChan <- err
-			}
-		}(service)
-	}
-
-	go func() {
-		wg.Wait()
-		close(errChan)
-	}()
-
-	for err := range errChan {
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return applyNetworkServices(services, commands, resolveConcurrentApply(opt))
 }
 
-func SetProxy(proxy, bypass, device string, onlyActiveDevice bool) error {
+func SetProxy(opt *Options) error {
+	proxy := ""
+	bypass := ""
+	if opt != nil {
+		proxy = opt.Proxy
+		bypass = opt.Bypass
+	}
 	if proxy == "" || bypass == "" {
-		config, err := QueryProxySettings(device, onlyActiveDevice)
+		config, err := QueryProxySettings(opt)
 		if err != nil {
 			return err
 		}
@@ -81,17 +55,9 @@ func SetProxy(proxy, bypass, device string, onlyActiveDevice bool) error {
 		return fmt.Errorf("invalid proxy address: %s", proxy)
 	}
 
-	var (
-		services []string
-		err      error
-	)
-	if device != "" {
-		services = []string{device}
-	} else {
-		services, err = getNetworkServices(onlyActiveDevice)
-		if err != nil {
-			return err
-		}
+	services, err := getTargetServices(opt)
+	if err != nil {
+		return err
 	}
 
 	commands := [][]string{
@@ -103,52 +69,25 @@ func SetProxy(proxy, bypass, device string, onlyActiveDevice bool) error {
 		append([]string{"-setproxybypassdomains"}, strings.Split(bypass, ",")...),
 	}
 
-	errChan := make(chan error, len(services))
-	var wg sync.WaitGroup
-
-	for _, service := range services {
-		wg.Add(1)
-		go func(svc string) {
-			defer wg.Done()
-			if err := execNetworksetupConcurrent(svc, commands); err != nil {
-				errChan <- err
-			}
-		}(service)
-	}
-
-	go func() {
-		wg.Wait()
-		close(errChan)
-	}()
-
-	for err := range errChan {
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return applyNetworkServices(services, commands, resolveConcurrentApply(opt))
 }
 
-func SetPac(pacUrl, device string, onlyActiveDevice bool) error {
+func SetPac(opt *Options) error {
+	pacUrl := ""
+	if opt != nil {
+		pacUrl = opt.PACURL
+	}
 	if pacUrl == "" {
-		config, err := QueryProxySettings(device, onlyActiveDevice)
+		config, err := QueryProxySettings(opt)
 		if err != nil {
 			return err
 		}
 		pacUrl = config.PAC.URL
 	}
 
-	var (
-		services []string
-		err      error
-	)
-	if device != "" {
-		services = []string{device}
-	} else {
-		services, err = getNetworkServices(onlyActiveDevice)
-		if err != nil {
-			return err
-		}
+	services, err := getTargetServices(opt)
+	if err != nil {
+		return err
 	}
 
 	commands := [][]string{
@@ -160,44 +99,13 @@ func SetPac(pacUrl, device string, onlyActiveDevice bool) error {
 		{"-setproxyautodiscovery", "on"},
 	}
 
-	errChan := make(chan error, len(services))
-	var wg sync.WaitGroup
-
-	for _, service := range services {
-		wg.Add(1)
-		go func(svc string) {
-			defer wg.Done()
-			if err := execNetworksetupConcurrent(svc, commands); err != nil {
-				errChan <- err
-			}
-		}(service)
-	}
-
-	go func() {
-		wg.Wait()
-		close(errChan)
-	}()
-
-	for err := range errChan {
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return applyNetworkServices(services, commands, resolveConcurrentApply(opt))
 }
 
-func QueryProxySettings(device string, onlyActiveDevice bool) (*ProxyConfig, error) {
-	var (
-		services []string
-		err      error
-	)
-	if device != "" {
-		services = []string{device}
-	} else {
-		services, err = getNetworkServices(onlyActiveDevice)
-		if err != nil {
-			return nil, err
-		}
+func QueryProxySettings(opt *Options) (*ProxyConfig, error) {
+	services, err := getQueryServices(opt)
+	if err != nil {
+		return nil, err
 	}
 
 	service := services[0]
@@ -247,6 +155,32 @@ func QueryProxySettings(device string, onlyActiveDevice bool) (*ProxyConfig, err
 	return config, nil
 }
 
+func getTargetServices(opt *Options) ([]string, error) {
+	if opt != nil && opt.Device != "" {
+		return []string{opt.Device}, nil
+	}
+	onlyActive := false
+	if opt != nil {
+		onlyActive = opt.OnlyActiveDevice
+	}
+	return getNetworkServices(onlyActive)
+}
+
+func getQueryServices(opt *Options) ([]string, error) {
+	if opt != nil && opt.Device != "" {
+		return []string{opt.Device}, nil
+	}
+	if opt != nil {
+		return getNetworkServices(opt.OnlyActiveDevice)
+	}
+
+	services, err := getNetworkServices(true)
+	if err == nil {
+		return services, nil
+	}
+	return getNetworkServices(false)
+}
+
 func getNetworkServices(onlyActiveDevice bool) ([]string, error) {
 	var (
 		ifaces []net.Interface
@@ -255,14 +189,14 @@ func getNetworkServices(onlyActiveDevice bool) ([]string, error) {
 	if onlyActiveDevice {
 		ifaces, err = net.Interfaces()
 		if err != nil {
-			return nil, fmt.Errorf("无法获取网络接口: %w", err)
+			return nil, fmt.Errorf("无法获取网络接口：%w", err)
 		}
 	}
 
 	cmd := exec.Command("networksetup", "-listnetworkserviceorder")
 	output, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("无法执行 networksetup 命令: %w", err)
+		return nil, fmt.Errorf("无法执行 networksetup 命令：%w", err)
 	}
 	if len(output) == 0 {
 		return nil, fmt.Errorf("networksetup 命令没有输出")
@@ -312,7 +246,7 @@ func getNetworkServices(onlyActiveDevice bool) ([]string, error) {
 	}
 
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("扫描输出时出错: %w", err)
+		return nil, fmt.Errorf("扫描输出时出错：%w", err)
 	}
 
 	if len(services) == 0 {
@@ -347,6 +281,52 @@ func execNetworksetupConcurrent(service string, commands [][]string) error {
 		}
 	}
 
+	return nil
+}
+
+func execNetworksetupSerial(service string, commands [][]string) error {
+	for _, cmd := range commands {
+		args := append([]string{cmd[0]}, append([]string{service}, cmd[1:]...)...)
+		if err := exec.Command("networksetup", args...).Run(); err != nil {
+			return fmt.Errorf("执行 networksetup %v 时出错，服务 %s: %w", args, service, err)
+		}
+	}
+	return nil
+}
+
+func applyNetworkServices(services []string, commands [][]string, concurrent bool) error {
+	if !concurrent {
+		for _, service := range services {
+			if err := execNetworksetupSerial(service, commands); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	errChan := make(chan error, len(services))
+	var wg sync.WaitGroup
+
+	for _, service := range services {
+		wg.Add(1)
+		go func(svc string) {
+			defer wg.Done()
+			if err := execNetworksetupConcurrent(svc, commands); err != nil {
+				errChan <- err
+			}
+		}(service)
+	}
+
+	go func() {
+		wg.Wait()
+		close(errChan)
+	}()
+
+	for err := range errChan {
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

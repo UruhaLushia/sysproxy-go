@@ -38,7 +38,7 @@ func (e *Environment) Init() error {
 	return nil
 }
 
-func DisableProxy(_ string, _ bool) error {
+func DisableProxy(_ *Options) error {
 	e := &Environment{}
 	if err := e.Init(); err != nil {
 		return err
@@ -54,9 +54,15 @@ func DisableProxy(_ string, _ bool) error {
 	}
 }
 
-func SetProxy(proxy, bypass, _ string, _ bool) error {
+func SetProxy(opt *Options) error {
+	proxy := ""
+	bypass := ""
+	if opt != nil {
+		proxy = opt.Proxy
+		bypass = opt.Bypass
+	}
 	if proxy == "" || bypass == "" {
-		config, err := QueryProxySettings("", false)
+		config, err := QueryProxySettings(nil)
 		if err != nil {
 			return err
 		}
@@ -93,14 +99,18 @@ func SetProxy(proxy, bypass, _ string, _ bool) error {
 	}
 }
 
-func SetPac(pacUrl, _ string, _ bool) error {
+func SetPac(opt *Options) error {
+	pacUrl := ""
+	if opt != nil {
+		pacUrl = opt.PACURL
+	}
 	e := &Environment{}
 	if err := e.Init(); err != nil {
 		return err
 	}
 
 	if pacUrl == "" {
-		currentConfig, err := QueryProxySettings("", false)
+		currentConfig, err := QueryProxySettings(nil)
 		if err != nil {
 			return err
 		}
@@ -121,7 +131,7 @@ func SetPac(pacUrl, _ string, _ bool) error {
 	}
 }
 
-func QueryProxySettings(_ string, _ bool) (*ProxyConfig, error) {
+func QueryProxySettings(_ *Options) (*ProxyConfig, error) {
 	e := &Environment{}
 	if err := e.Init(); err != nil {
 		return nil, err

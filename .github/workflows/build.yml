@@ -39,29 +39,21 @@ jobs:
           - { goos: windows, goarch: arm64, output: arm64 }
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
 
     - name: Set up Go
-      if: ${{ matrix.jobs.goversion == '' && matrix.jobs.abi != '1' }}
-      uses: actions/setup-go@v5
+      if: ${{ matrix.jobs.abi != '1' }}
+      uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
       with:
-        go-version: '1.24'
+        go-download-base-url: 'https://github.com/MetaCubeX/go/releases/download/build'
+        go-version: '1.26'
 
-    - name: Set up Go1.24 loongarch abi1
-      if: ${{ matrix.jobs.goarch == 'loong64' && matrix.jobs.abi == '1' }}
-      run: |
-        wget -q https://github.com/MetaCubeX/loongarch64-golang/releases/download/1.24.0/go1.24.0.linux-amd64-abi1.tar.gz
-        sudo tar zxf go1.24.0.linux-amd64-abi1.tar.gz -C /usr/local
-        echo "/usr/local/go/bin" >> $GITHUB_PATH
-
-    - name: Revert Golang1.24 commit for Windows7/8
-      if: ${{ matrix.jobs.goos == 'windows' }}
-      run: |
-        cd $(go env GOROOT)
-        curl https://github.com/MetaCubeX/go/commit/2a406dc9f1ea7323d6ca9fccb2fe9ddebb6b1cc8.diff | patch --verbose -p 1
-        curl https://github.com/MetaCubeX/go/commit/7b1fd7d39c6be0185fbe1d929578ab372ac5c632.diff | patch --verbose -p 1
-        curl https://github.com/MetaCubeX/go/commit/979d6d8bab3823ff572ace26767fd2ce3cf351ae.diff | patch --verbose -p 1
-        curl https://github.com/MetaCubeX/go/commit/ac3e93c061779dfefc0dd13a5b6e6f764a25621e.diff | patch --verbose -p 1
+    - name: Set up Go1.26 loongarch abi1
+      if: ${{ matrix.jobs.abi == '1' }}
+      uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+      with:
+        go-download-base-url: 'https://github.com/MetaCubeX/loongarch64-golang/releases/download/1.26.0'
+        go-version: '1.26.0'
 
     - name: Build
       env:
@@ -78,7 +70,7 @@ jobs:
         fi
 
     - name: Archive production artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: "${{ matrix.jobs.goos }}-${{ matrix.jobs.output }}"
         path: |
@@ -88,7 +80,7 @@ jobs:
     needs: [build]
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/download-artifact@v4
+    - uses: actions/download-artifact@v8
       with:
         path: bin/
         merge-multiple: true
@@ -108,7 +100,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Publish Prerelease
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v3
       if: ${{  success() }}
       with:
         tag_name: pre-release
@@ -121,7 +113,7 @@ jobs:
     needs: [build]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: bin/
           merge-multiple: true
@@ -135,7 +127,7 @@ jobs:
 
       - name: Publish Release
         if: success()
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.event.inputs.version != '' && github.event.inputs.version || github.ref }}
           files: |

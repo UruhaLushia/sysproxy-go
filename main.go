@@ -16,10 +16,10 @@ var (
 	bypass string
 	pacUrl string
 
-	listen string
-	device string
-
+	listen           string
+	device           string
 	onlyActiveDevice bool
+	multiThread      bool
 )
 
 var cmd = &cobra.Command{
@@ -32,7 +32,13 @@ var proxyCmd = &cobra.Command{
 	Short: "设置系统代理",
 	Run: func(cmd *cobra.Command, args []string) {
 		t := time.Now()
-		err := sysproxy.SetProxy(server, bypass, device, onlyActiveDevice)
+		err := sysproxy.SetProxy(&sysproxy.Options{
+			Proxy:            server,
+			Bypass:           bypass,
+			Device:           device,
+			OnlyActiveDevice: onlyActiveDevice,
+			Concurrent:       sysproxy.Bool(multiThread),
+		})
 		if err != nil {
 			fmt.Println("设置代理失败：", err)
 			return
@@ -46,7 +52,12 @@ var pacCmd = &cobra.Command{
 	Short: "设置 PAC 代理",
 	Run: func(cmd *cobra.Command, args []string) {
 		t := time.Now()
-		err := sysproxy.SetPac(pacUrl, device, onlyActiveDevice)
+		err := sysproxy.SetPac(&sysproxy.Options{
+			PACURL:           pacUrl,
+			Device:           device,
+			OnlyActiveDevice: onlyActiveDevice,
+			Concurrent:       sysproxy.Bool(multiThread),
+		})
 		if err != nil {
 			fmt.Println("设置 PAC 代理失败：", err)
 			return
@@ -60,7 +71,11 @@ var disableCmd = &cobra.Command{
 	Short: "取消代理设置",
 	Run: func(cmd *cobra.Command, args []string) {
 		t := time.Now()
-		err := sysproxy.DisableProxy(device, onlyActiveDevice)
+		err := sysproxy.DisableProxy(&sysproxy.Options{
+			Device:           device,
+			OnlyActiveDevice: onlyActiveDevice,
+			Concurrent:       sysproxy.Bool(multiThread),
+		})
 		if err != nil {
 			fmt.Println("取消代理设置失败：", err)
 			return
@@ -73,7 +88,10 @@ var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "查看当前代理设置",
 	Run: func(cmd *cobra.Command, args []string) {
-		status, err := sysproxy.QueryProxySettings(device, onlyActiveDevice)
+		status, err := sysproxy.QueryProxySettings(&sysproxy.Options{
+			Device:           device,
+			OnlyActiveDevice: onlyActiveDevice,
+		})
 		if err != nil {
 			fmt.Println("查询代理设置失败：", err)
 			return
@@ -109,6 +127,7 @@ func init() {
 
 	cmd.PersistentFlags().BoolVarP(&onlyActiveDevice, "only-active-device", "a", false, "仅对活跃的网络设备生效")
 	cmd.PersistentFlags().StringVarP(&device, "device", "d", "", "指定网络设备")
+	cmd.PersistentFlags().BoolVar(&multiThread, "multithread", sysproxy.DefaultConcurrent(), "启用多线程并发设置；macOS 默认开启，Windows 默认关闭")
 
 	proxyCmd.Flags().StringVarP(&server, "server", "s", "", "代理服务器地址")
 	proxyCmd.Flags().StringVarP(&bypass, "bypass", "b", "", "绕过地址")
