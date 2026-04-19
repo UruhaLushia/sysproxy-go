@@ -8,6 +8,9 @@ type Options struct {
 	PACURL           string
 	Device           string
 	OnlyActiveDevice bool
+	PeerPID          int
+	PeerUID          uint32
+	PeerGID          uint32
 	Concurrent       *bool
 }
 

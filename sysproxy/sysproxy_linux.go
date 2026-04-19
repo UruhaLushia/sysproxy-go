@@ -4,13 +4,11 @@ package sysproxy
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
 	"strings"
-	"syscall"
 )
 
 type Environment struct {
+	ctx         *linuxExecContext
 	desktop     string
 	isKde       bool
 	isKde6      bool
@@ -18,19 +16,25 @@ type Environment struct {
 	initialized bool
 }
 
-func (e *Environment) Init() error {
+func (e *Environment) Init(opt *Options) error {
 	if e.initialized {
 		return nil
 	}
 
-	desktop := os.Getenv("XDG_CURRENT_DESKTOP")
+	ctx, err := newLinuxExecContext(opt)
+	if err != nil {
+		return err
+	}
+
+	desktop := ctx.envMap["XDG_CURRENT_DESKTOP"]
 	if desktop == "" {
 		return fmt.Errorf("XDG_CURRENT_DESKTOP environment variable not set")
 	}
 
+	e.ctx = ctx
 	e.desktop = desktop
 	e.isKde = desktop == "KDE"
-	e.isKde6 = e.isKde && os.Getenv("KDE_SESSION_VERSION") == "6"
+	e.isKde6 = e.isKde && ctx.envMap["KDE_SESSION_VERSION"] == "6"
 	e.isGnome = strings.Contains(desktop, "GNOME") || desktop == "Unity" ||
 		desktop == "X-Cinnamon" || desktop == "niri"
 	e.initialized = true
@@ -38,17 +42,17 @@ func (e *Environment) Init() error {
 	return nil
 }
 
-func DisableProxy(_ *Options) error {
+func DisableProxy(opt *Options) error {
 	e := &Environment{}
-	if err := e.Init(); err != nil {
+	if err := e.Init(opt); err != nil {
 		return err
 	}
 
 	switch {
 	case e.isKde:
-		return clearKDEProxy(e.isKde6)
+		return clearKDEProxy(e)
 	case e.isGnome:
-		return clearGnomeProxy()
+		return clearGnomeProxy(e)
 	default:
 		return fmt.Errorf("不支持的桌面：%s", e.desktop)
 	}
@@ -62,7 +66,7 @@ func SetProxy(opt *Options) error {
 		bypass = opt.Bypass
 	}
 	if proxy == "" || bypass == "" {
-		config, err := QueryProxySettings(nil)
+		config, err := QueryProxySettings(opt)
 		if err != nil {
 			return err
 		}
@@ -75,7 +79,7 @@ func SetProxy(opt *Options) error {
 		}
 	}
 	e := &Environment{}
-	if err := e.Init(); err != nil {
+	if err := e.Init(opt); err != nil {
 		return err
 	}
 
@@ -91,9 +95,9 @@ func SetProxy(opt *Options) error {
 
 	switch {
 	case e.isKde:
-		return setKDEProxy(config, e.isKde6)
+		return setKDEProxy(e, config)
 	case e.isGnome:
-		return setGnomeProxy(config)
+		return setGnomeProxy(e, config)
 	default:
 		return fmt.Errorf("不支持的桌面：%s", e.desktop)
 	}
@@ -105,12 +109,12 @@ func SetPac(opt *Options) error {
 		pacUrl = opt.PACURL
 	}
 	e := &Environment{}
-	if err := e.Init(); err != nil {
+	if err := e.Init(opt); err != nil {
 		return err
 	}
 
 	if pacUrl == "" {
-		currentConfig, err := QueryProxySettings(nil)
+		currentConfig, err := QueryProxySettings(opt)
 		if err != nil {
 			return err
 		}
@@ -123,45 +127,31 @@ func SetPac(opt *Options) error {
 
 	switch {
 	case e.isKde:
-		return setKDEPac(config, e.isKde6)
+		return setKDEPac(e, config)
 	case e.isGnome:
-		return setGnomePac(config)
+		return setGnomePac(e, config)
 	default:
 		return fmt.Errorf("不支持的桌面：%s", e.desktop)
 	}
 }
 
-func QueryProxySettings(_ *Options) (*ProxyConfig, error) {
+func QueryProxySettings(opt *Options) (*ProxyConfig, error) {
 	e := &Environment{}
-	if err := e.Init(); err != nil {
+	if err := e.Init(opt); err != nil {
 		return nil, err
 	}
 
 	switch {
 	case e.isKde:
-		return queryKDESettings(e.isKde6)
+		return queryKDESettings(e)
 	case e.isGnome:
-		return queryGnomeSettings()
+		return queryGnomeSettings(e)
 	default:
 		return nil, fmt.Errorf("不支持的桌面：%s", e.desktop)
 	}
 }
 
-func execAsCurrentUser(name string, arg ...string) *exec.Cmd {
-	cmd := exec.Command(name, arg...)
-	if os.Geteuid() == 0 {
-		fmt.Println(os.Getuid(), os.Getgid())
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			Credential: &syscall.Credential{
-				Uid: uint32(os.Getuid()),
-				Gid: uint32(os.Getgid()),
-			},
-		}
-	}
-	return cmd
-}
-
-func queryGnomeSettings() (*ProxyConfig, error) {
+func queryGnomeSettings(e *Environment) (*ProxyConfig, error) {
 	settings := map[string]string{}
 	keys := []struct {
 		name, path string
@@ -181,7 +171,7 @@ func queryGnomeSettings() (*ProxyConfig, error) {
 	}
 
 	for _, key := range keys {
-		output, err := execAsCurrentUser("gsettings", append([]string{"get"}, strings.Split(key.path, " ")...)...).Output()
+		output, err := execAsCurrentUser(e.ctx, "gsettings", append([]string{"get"}, strings.Split(key.path, " ")...)...).Output()
 		if err != nil {
 			return nil, fmt.Errorf("无法读取 %s 的 GNOME 配置：%v", key.name, err)
 		}
@@ -213,8 +203,8 @@ func queryGnomeSettings() (*ProxyConfig, error) {
 	return config, nil
 }
 
-func setGnomeProxy(config *ProxyConfig) error {
-	if err := execGsettings("org.gnome.system.proxy", "mode", "manual"); err != nil {
+func setGnomeProxy(e *Environment, config *ProxyConfig) error {
+	if err := execGsettings(e, "org.gnome.system.proxy", "mode", "manual"); err != nil {
 		return err
 	}
 
@@ -228,10 +218,10 @@ func setGnomeProxy(config *ProxyConfig) error {
 	for proxyType, addr := range proxyTypes {
 		fmt.Println(proxyType, addr)
 		if addr.host != "" {
-			if err := execGsettings(fmt.Sprintf("org.gnome.system.proxy.%s", proxyType), "host", addr.host); err != nil {
+			if err := execGsettings(e, fmt.Sprintf("org.gnome.system.proxy.%s", proxyType), "host", addr.host); err != nil {
 				return err
 			}
-			if err := execGsettings(fmt.Sprintf("org.gnome.system.proxy.%s", proxyType), "port", addr.port); err != nil {
+			if err := execGsettings(e, fmt.Sprintf("org.gnome.system.proxy.%s", proxyType), "port", addr.port); err != nil {
 				return err
 			}
 		}
@@ -239,37 +229,37 @@ func setGnomeProxy(config *ProxyConfig) error {
 
 	if config.Proxy.Bypass != "" {
 		bypassList := fmt.Sprintf("['%s']", strings.Join(strings.Split(config.Proxy.Bypass, ","), "','"))
-		if err := execGsettings("org.gnome.system.proxy", "ignore-hosts", bypassList); err != nil {
+		if err := execGsettings(e, "org.gnome.system.proxy", "ignore-hosts", bypassList); err != nil {
 			return err
 		}
 	}
 
-	return execGsettings("org.gnome.system.proxy", "use-same-proxy", fmt.Sprintf("%v", config.Proxy.SameForAll))
+	return execGsettings(e, "org.gnome.system.proxy", "use-same-proxy", fmt.Sprintf("%v", config.Proxy.SameForAll))
 }
 
-func setGnomePac(config *ProxyConfig) error {
-	if err := execGsettings("org.gnome.system.proxy", "mode", "auto"); err != nil {
+func setGnomePac(e *Environment, config *ProxyConfig) error {
+	if err := execGsettings(e, "org.gnome.system.proxy", "mode", "auto"); err != nil {
 		return err
 	}
-	return execGsettings("org.gnome.system.proxy", "autoconfig-url", config.PAC.URL)
+	return execGsettings(e, "org.gnome.system.proxy", "autoconfig-url", config.PAC.URL)
 }
 
-func clearGnomeProxy() error {
-	return execGsettings("org.gnome.system.proxy", "mode", "none")
+func clearGnomeProxy(e *Environment) error {
+	return execGsettings(e, "org.gnome.system.proxy", "mode", "none")
 }
 
-func execGsettings(schema, key, value string) error {
-	return execAsCurrentUser("gsettings", "set", schema, key, value).Run()
+func execGsettings(e *Environment, schema, key, value string) error {
+	return execAsCurrentUser(e.ctx, "gsettings", "set", schema, key, value).Run()
 }
 
-func queryKDESettings(isKde6 bool) (*ProxyConfig, error) {
+func queryKDESettings(e *Environment) (*ProxyConfig, error) {
 	cmd := "kreadconfig5"
-	if isKde6 {
+	if e.isKde6 {
 		cmd = "kreadconfig6"
 	}
 
 	group := "Proxy Settings"
-	if !isKde6 {
+	if !e.isKde6 {
 		group = "Proxy"
 	}
 
@@ -285,7 +275,7 @@ func queryKDESettings(isKde6 bool) (*ProxyConfig, error) {
 	}
 
 	for key := range keys {
-		output, err := execAsCurrentUser(cmd, "--file", "kioslaverc", "--group", group, "--key", key).Output()
+		output, err := execAsCurrentUser(e.ctx, cmd, "--file", "kioslaverc", "--group", group, "--key", key).Output()
 		if err != nil {
 			return nil, fmt.Errorf("无法读取 %s 的 KDE 配置：%v", key, err)
 		}
@@ -315,18 +305,18 @@ func queryKDESettings(isKde6 bool) (*ProxyConfig, error) {
 	return config, nil
 }
 
-func setKDEProxy(config *ProxyConfig, isKde6 bool) error {
+func setKDEProxy(e *Environment, config *ProxyConfig) error {
 	cmd := "kwriteconfig5"
-	if isKde6 {
+	if e.isKde6 {
 		cmd = "kwriteconfig6"
 	}
 
 	group := "Proxy Settings"
-	if !isKde6 {
+	if !e.isKde6 {
 		group = "Proxy"
 	}
 
-	if err := execKDEConfig(cmd, "ProxyType", "1", group); err != nil {
+	if err := execKDEConfig(e, cmd, "ProxyType", "1", group); err != nil {
 		return err
 	}
 
@@ -338,12 +328,12 @@ func setKDEProxy(config *ProxyConfig, isKde6 bool) error {
 	}
 
 	for key, value := range servers {
-		if err := execKDEConfig(cmd, key, value, group); err != nil {
+		if err := execKDEConfig(e, cmd, key, value, group); err != nil {
 			return err
 		}
 	}
 
-	if err := execKDEConfig(cmd, "NoProxyFor", config.Proxy.Bypass, group); err != nil {
+	if err := execKDEConfig(e, cmd, "NoProxyFor", config.Proxy.Bypass, group); err != nil {
 		return err
 	}
 
@@ -351,42 +341,42 @@ func setKDEProxy(config *ProxyConfig, isKde6 bool) error {
 	if config.Proxy.SameForAll {
 		sameProxy = "true"
 	}
-	return execKDEConfig(cmd, "UseSameProxy", sameProxy, group)
+	return execKDEConfig(e, cmd, "UseSameProxy", sameProxy, group)
 }
 
-func setKDEPac(config *ProxyConfig, isKde6 bool) error {
+func setKDEPac(e *Environment, config *ProxyConfig) error {
 	cmd := "kwriteconfig5"
-	if isKde6 {
+	if e.isKde6 {
 		cmd = "kwriteconfig6"
 	}
 
 	group := "Proxy Settings"
-	if !isKde6 {
+	if !e.isKde6 {
 		group = "Proxy"
 	}
 
-	if err := execKDEConfig(cmd, "ProxyType", "2", group); err != nil {
+	if err := execKDEConfig(e, cmd, "ProxyType", "2", group); err != nil {
 		return err
 	}
 
-	return execKDEConfig(cmd, "Proxy Config Script", config.PAC.URL, group)
+	return execKDEConfig(e, cmd, "Proxy Config Script", config.PAC.URL, group)
 }
 
-func clearKDEProxy(isKde6 bool) error {
+func clearKDEProxy(e *Environment) error {
 	cmd := "kwriteconfig5"
-	if isKde6 {
+	if e.isKde6 {
 		cmd = "kwriteconfig6"
 	}
 
 	group := "Proxy Settings"
-	if !isKde6 {
+	if !e.isKde6 {
 		group = "Proxy"
 	}
 
-	return execKDEConfig(cmd, "ProxyType", "0", group)
+	return execKDEConfig(e, cmd, "ProxyType", "0", group)
 }
 
-func execKDEConfig(cmd, key, value, group string) error {
+func execKDEConfig(e *Environment, cmd, key, value, group string) error {
 	args := []string{"--file", "kioslaverc", "--group", group, "--key", key, value}
-	return execAsCurrentUser(cmd, args...).Run()
+	return execAsCurrentUser(e.ctx, cmd, args...).Run()
 }
