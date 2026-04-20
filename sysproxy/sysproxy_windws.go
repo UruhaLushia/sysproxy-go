@@ -3,6 +3,7 @@
 package sysproxy
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"syscall"
@@ -24,6 +25,8 @@ const (
 	PROXY_TYPE_DIRECT         = 1
 	PROXY_TYPE_PROXY          = 2
 	PROXY_TYPE_AUTO_PROXY_URL = 4
+
+	internetSettingsRegistryPath = `Software\Microsoft\Windows\CurrentVersion\Internet Settings`
 )
 
 var (
@@ -167,6 +170,10 @@ func getTargetConnections(opt *Options) ([]string, error) {
 }
 
 func DisableProxy(opt *Options) error {
+	if useRegistrySettings(opt) {
+		return disableProxyRegistry(opt)
+	}
+
 	return refreshAndApplySettings([]InternetPerConnOption{{
 		dwOption: INTERNET_PER_CONN_FLAGS,
 		dwValue:  PROXY_TYPE_DIRECT,
@@ -174,6 +181,10 @@ func DisableProxy(opt *Options) error {
 }
 
 func SetProxy(opt *Options) error {
+	if useRegistrySettings(opt) {
+		return setProxyRegistry(opt)
+	}
+
 	proxy := ""
 	bypass := ""
 	if opt != nil {
@@ -210,6 +221,10 @@ func SetProxy(opt *Options) error {
 }
 
 func SetPac(opt *Options) error {
+	if useRegistrySettings(opt) {
+		return setPacRegistry(opt)
+	}
+
 	pacUrl := ""
 	if opt != nil {
 		pacUrl = opt.PACURL
@@ -230,7 +245,14 @@ func SetPac(opt *Options) error {
 	}, opt)
 }
 
-func QueryProxySettings(_ *Options) (*ProxyConfig, error) {
+func QueryProxySettings(opt *Options) (*ProxyConfig, error) {
+	if useRegistrySettings(opt) {
+		if err := validateRegistryTarget(opt); err != nil {
+			return nil, err
+		}
+		return queryProxySettingsRegistry()
+	}
+
 	options := [4]InternetPerConnOption{
 		{dwOption: INTERNET_PER_CONN_FLAGS},
 		{dwOption: INTERNET_PER_CONN_PROXY_SERVER},
@@ -264,6 +286,178 @@ func QueryProxySettings(_ *Options) (*ProxyConfig, error) {
 	config.PAC.URL = getString(options[3].dwValue)
 
 	return config, nil
+}
+
+func useRegistrySettings(opt *Options) bool {
+	return opt != nil && opt.UseRegistry
+}
+
+func validateRegistryTarget(opt *Options) error {
+	if opt != nil && opt.Device != "" {
+		return fmt.Errorf("注册表模式不支持指定网络设备")
+	}
+	return nil
+}
+
+func disableProxyRegistry(opt *Options) error {
+	if err := validateRegistryTarget(opt); err != nil {
+		return err
+	}
+
+	key, err := openCurrentUserKey(internetSettingsRegistryPath, registry.SET_VALUE)
+	if err != nil {
+		return err
+	}
+	defer key.Close()
+
+	if err := key.SetDWordValue("ProxyEnable", 0); err != nil {
+		return err
+	}
+	if err := key.SetDWordValue("AutoDetect", 0); err != nil {
+		return err
+	}
+	return deleteRegistryValue(key, "AutoConfigURL")
+}
+
+func setProxyRegistry(opt *Options) error {
+	if err := validateRegistryTarget(opt); err != nil {
+		return err
+	}
+
+	proxy := ""
+	bypass := ""
+	if opt != nil {
+		proxy = opt.Proxy
+		bypass = opt.Bypass
+	}
+	if proxy == "" || bypass == "" {
+		config, err := queryProxySettingsRegistry()
+		if err != nil {
+			return err
+		}
+
+		if proxy == "" {
+			proxy = config.Proxy.Servers["http_server"]
+		}
+		if bypass == "" {
+			bypass = config.Proxy.Bypass
+		}
+	}
+
+	key, err := openCurrentUserKey(internetSettingsRegistryPath, registry.SET_VALUE)
+	if err != nil {
+		return err
+	}
+	defer key.Close()
+
+	if err := key.SetDWordValue("ProxyEnable", 1); err != nil {
+		return err
+	}
+	if err := key.SetStringValue("ProxyServer", proxy); err != nil {
+		return err
+	}
+	if err := key.SetStringValue("ProxyOverride", bypass); err != nil {
+		return err
+	}
+	if err := key.SetDWordValue("AutoDetect", 0); err != nil {
+		return err
+	}
+	return deleteRegistryValue(key, "AutoConfigURL")
+}
+
+func setPacRegistry(opt *Options) error {
+	if err := validateRegistryTarget(opt); err != nil {
+		return err
+	}
+
+	pacUrl := ""
+	if opt != nil {
+		pacUrl = opt.PACURL
+	}
+	if pacUrl == "" {
+		config, err := queryProxySettingsRegistry()
+		if err != nil {
+			return err
+		}
+		pacUrl = config.PAC.URL
+	}
+
+	key, err := openCurrentUserKey(internetSettingsRegistryPath, registry.SET_VALUE)
+	if err != nil {
+		return err
+	}
+	defer key.Close()
+
+	if err := key.SetDWordValue("ProxyEnable", 0); err != nil {
+		return err
+	}
+	if err := key.SetDWordValue("AutoDetect", 0); err != nil {
+		return err
+	}
+	if pacUrl == "" {
+		return nil
+	}
+	return key.SetStringValue("AutoConfigURL", pacUrl)
+}
+
+func queryProxySettingsRegistry() (*ProxyConfig, error) {
+	key, err := openCurrentUserKey(internetSettingsRegistryPath, registry.READ)
+	if err != nil {
+		return nil, err
+	}
+	defer key.Close()
+
+	proxyEnable, err := readRegistryDWORD(key, "ProxyEnable")
+	if err != nil {
+		return nil, err
+	}
+	proxyServer, err := readRegistryString(key, "ProxyServer")
+	if err != nil {
+		return nil, err
+	}
+	proxyOverride, err := readRegistryString(key, "ProxyOverride")
+	if err != nil {
+		return nil, err
+	}
+	autoConfigURL, err := readRegistryString(key, "AutoConfigURL")
+	if err != nil {
+		return nil, err
+	}
+
+	config := &ProxyConfig{}
+	config.Proxy.Enable = proxyEnable != 0
+	config.Proxy.Servers = map[string]string{
+		"http_server": proxyServer,
+	}
+	config.Proxy.Bypass = proxyOverride
+	config.PAC.Enable = autoConfigURL != ""
+	config.PAC.URL = autoConfigURL
+
+	return config, nil
+}
+
+func readRegistryDWORD(key registry.Key, name string) (uint64, error) {
+	value, _, err := key.GetIntegerValue(name)
+	if errors.Is(err, registry.ErrNotExist) {
+		return 0, nil
+	}
+	return value, err
+}
+
+func readRegistryString(key registry.Key, name string) (string, error) {
+	value, _, err := key.GetStringValue(name)
+	if errors.Is(err, registry.ErrNotExist) {
+		return "", nil
+	}
+	return value, err
+}
+
+func deleteRegistryValue(key registry.Key, name string) error {
+	err := key.DeleteValue(name)
+	if errors.Is(err, registry.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 func getString(val uintptr) string {

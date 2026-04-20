@@ -12,6 +12,7 @@ type Options struct {
 	PeerUID          uint32
 	PeerGID          uint32
 	Concurrent       *bool
+	UseRegistry      bool
 }
 
 func resolveConcurrentApply(opt *Options) bool {
