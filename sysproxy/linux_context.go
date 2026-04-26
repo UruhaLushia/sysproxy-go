@@ -3,6 +3,7 @@
 package sysproxy
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -27,7 +28,16 @@ func newLinuxExecContext(opt *Options) (*linuxExecContext, error) {
 		gid:    uint32(os.Getgid()),
 	}
 
-	if opt != nil && opt.PeerPID > 0 {
+	if opt != nil && len(opt.Environment) > 0 {
+		envMap = mergeEnvMaps(sessionBaseEnv(), envSliceToMap(opt.Environment))
+		ctx.envMap = envMap
+		if opt.PeerUID != 0 || opt.PeerGID != 0 {
+			ctx.uid = opt.PeerUID
+			ctx.gid = opt.PeerGID
+			ctx.useCredential = os.Geteuid() == 0
+		}
+		ensureLinuxSessionEnv(envMap, ctx.uid)
+	} else if opt != nil && opt.PeerPID > 0 {
 		peerEnv, err := readProcessEnv(opt.PeerPID)
 		if err != nil {
 			return nil, fmt.Errorf("读取连接进程环境失败：%w", err)
@@ -127,14 +137,18 @@ func readProcessEnv(pid int) (map[string]string, error) {
 }
 
 func execAsCurrentUser(ctx *linuxExecContext, name string, arg ...string) *exec.Cmd {
-	cmd := exec.Command(name, arg...)
-	if ctx != nil {
-		cmd.Env = ctx.env
-		if ctx.useCredential {
+	return execAsCurrentUserContext(context.Background(), ctx, name, arg...)
+}
+
+func execAsCurrentUserContext(ctx context.Context, execCtx *linuxExecContext, name string, arg ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, arg...)
+	if execCtx != nil {
+		cmd.Env = execCtx.env
+		if execCtx.useCredential {
 			cmd.SysProcAttr = &syscall.SysProcAttr{
 				Credential: &syscall.Credential{
-					Uid: ctx.uid,
-					Gid: ctx.gid,
+					Uid: execCtx.uid,
+					Gid: execCtx.gid,
 				},
 			}
 		}

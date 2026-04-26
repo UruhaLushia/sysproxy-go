@@ -11,6 +11,7 @@ type Options struct {
 	PeerPID          int
 	PeerUID          uint32
 	PeerGID          uint32
+	Environment      []string
 	Concurrent       *bool
 	UseRegistry      bool
 }

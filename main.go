@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"time"
 
 	"github.com/xishang0128/sysproxy-go/sysproxy"
@@ -110,6 +113,32 @@ var statusCmd = &cobra.Command{
 	},
 }
 
+var watchCmd = &cobra.Command{
+	Use:   "watch",
+	Short: "监听系统代理设置变更",
+	Run: func(cmd *cobra.Command, args []string) {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+
+		opts := &sysproxy.Options{
+			Device:           device,
+			OnlyActiveDevice: onlyActiveDevice,
+			UseRegistry:      useRegistry,
+		}
+
+		for {
+			if err := sysproxy.WaitProxySettingsChange(ctx, opts); err != nil {
+				if errors.Is(err, context.Canceled) {
+					return
+				}
+				fmt.Println("监听代理设置失败：", err)
+				return
+			}
+			fmt.Println("update")
+		}
+	},
+}
+
 var serverCmd = &cobra.Command{
 	Use:   "server",
 	Short: "启动监听服务",
@@ -128,6 +157,7 @@ func init() {
 	cmd.AddCommand(pacCmd)
 	cmd.AddCommand(disableCmd)
 	cmd.AddCommand(statusCmd)
+	cmd.AddCommand(watchCmd)
 	cmd.AddCommand(serverCmd)
 
 	cmd.PersistentFlags().BoolVarP(&onlyActiveDevice, "only-active-device", "a", false, "仅对活跃的网络设备生效")
