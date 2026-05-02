@@ -9,7 +9,7 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/xishang0128/sysproxy-go/sysproxy"
+	"github.com/UruhaLushia/sysproxy-go/sysproxy"
 
 	"github.com/spf13/cobra"
 )

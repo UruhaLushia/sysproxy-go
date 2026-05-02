@@ -7,7 +7,7 @@
 ## 安装
 
 ```bash
-go install github.com/xishang0128/sysproxy-go@latest
+go install github.com/UruhaLushia/sysproxy-go@latest
 ```
 
 `go install` 默认生成的可执行文件名是 `sysproxy-go`。下文使用 `sysproxy` 表示命令名，可按实际二进制名称或重命名后的名称替换。
@@ -15,7 +15,7 @@ go install github.com/xishang0128/sysproxy-go@latest
 作为库使用：
 
 ```bash
-go get github.com/xishang0128/sysproxy-go
+go get github.com/UruhaLushia/sysproxy-go
 ```
 
 ## 命令行用法
@@ -78,7 +78,7 @@ sysproxy guard --url http://127.0.0.1:7890/proxy.pac
 ```go
 package main
 
-import "github.com/xishang0128/sysproxy-go/sysproxy"
+import "github.com/UruhaLushia/sysproxy-go/sysproxy"
 
 func main() {
 	err := sysproxy.SetProxy(&sysproxy.Options{
