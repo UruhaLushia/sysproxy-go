@@ -139,6 +139,64 @@ var watchCmd = &cobra.Command{
 	},
 }
 
+var guardCmd = &cobra.Command{
+	Use:   "guard",
+	Short: "守护系统代理设置，检测到变更后自动恢复",
+	Run: func(cmd *cobra.Command, args []string) {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+
+		opts := &sysproxy.Options{
+			Proxy:            server,
+			Bypass:           bypass,
+			PACURL:           pacUrl,
+			Device:           device,
+			OnlyActiveDevice: onlyActiveDevice,
+			Concurrent:       sysproxy.Bool(multiThread),
+			UseRegistry:      useRegistry,
+		}
+
+		watchOpts := &sysproxy.Options{
+			Device:           device,
+			OnlyActiveDevice: onlyActiveDevice,
+			UseRegistry:      useRegistry,
+		}
+
+		var applyFn func() error
+		if pacUrl != "" {
+			applyFn = func() error {
+				return sysproxy.SetPac(opts)
+			}
+		} else {
+			applyFn = func() error {
+				return sysproxy.SetProxy(opts)
+			}
+		}
+
+		if err := applyFn(); err != nil {
+			fmt.Println("初始设置代理失败：", err)
+			return
+		}
+		fmt.Println("代理已设置，开始守护...")
+
+		for {
+			if err := sysproxy.WaitProxySettingsChange(ctx, watchOpts); err != nil {
+				if errors.Is(err, context.Canceled) {
+					return
+				}
+				fmt.Println("监听代理设置失败：", err)
+				return
+			}
+			fmt.Println("检测到代理设置变更，正在恢复...")
+			if err := applyFn(); err != nil {
+				fmt.Println("恢复代理设置失败：", err)
+			} else {
+				fmt.Println("代理设置已恢复")
+			}
+		}
+	},
+}
+
 var serverCmd = &cobra.Command{
 	Use:   "server",
 	Short: "启动监听服务",
@@ -158,6 +216,7 @@ func init() {
 	cmd.AddCommand(disableCmd)
 	cmd.AddCommand(statusCmd)
 	cmd.AddCommand(watchCmd)
+	cmd.AddCommand(guardCmd)
 	cmd.AddCommand(serverCmd)
 
 	cmd.PersistentFlags().BoolVarP(&onlyActiveDevice, "only-active-device", "a", false, "仅对活跃的网络设备生效")
@@ -169,6 +228,10 @@ func init() {
 	proxyCmd.Flags().StringVarP(&bypass, "bypass", "b", "", "绕过地址")
 
 	pacCmd.Flags().StringVarP(&pacUrl, "url", "u", "", "pac 地址")
+
+	guardCmd.Flags().StringVarP(&server, "server", "s", "", "代理服务器地址")
+	guardCmd.Flags().StringVarP(&bypass, "bypass", "b", "", "绕过地址")
+	guardCmd.Flags().StringVarP(&pacUrl, "url", "u", "", "pac 地址")
 
 	serverCmd.Flags().StringVarP(&listen, "listen", "l", "/tmp/sparkle-helper.sock", "监听地址")
 }
