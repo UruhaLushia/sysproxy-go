@@ -14,6 +14,10 @@ import (
 const systemConfigurationPreferencesPath = "/Library/Preferences/SystemConfiguration/preferences.plist"
 
 func WaitProxySettingsChange(ctx context.Context, _ *Options) error {
+	return WaitProxySettingsChangeReady(ctx, nil, nil)
+}
+
+func WaitProxySettingsChangeReady(ctx context.Context, _ *Options, ready func()) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -37,6 +41,10 @@ func WaitProxySettingsChange(ctx context.Context, _ *Options) error {
 
 	if _, err := unix.Kevent(kq, changes, nil, nil); err != nil {
 		return fmt.Errorf("注册 macOS 系统代理配置监听失败：%w", err)
+	}
+
+	if ready != nil {
+		ready()
 	}
 
 	events := make([]unix.Kevent_t, 1)

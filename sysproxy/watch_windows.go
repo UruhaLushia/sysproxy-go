@@ -15,6 +15,10 @@ const internetSettingsConnectionsRegistryPath = internetSettingsRegistryPath + `
 // WaitProxySettingsChange blocks until Windows reports that current-user proxy
 // registry settings changed or the context is canceled.
 func WaitProxySettingsChange(ctx context.Context, opt *Options) error {
+	return WaitProxySettingsChangeReady(ctx, opt, nil)
+}
+
+func WaitProxySettingsChangeReady(ctx context.Context, opt *Options, ready func()) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -54,6 +58,10 @@ func WaitProxySettingsChange(ctx context.Context, opt *Options) error {
 	}
 	handles = append(handles, cancelEvent)
 	defer closeHandles(handles)
+
+	if ready != nil {
+		ready()
+	}
 
 	done := make(chan struct{})
 	defer close(done)

@@ -18,6 +18,10 @@ import (
 )
 
 func WaitProxySettingsChange(ctx context.Context, opt *Options) error {
+	return WaitProxySettingsChangeReady(ctx, opt, nil)
+}
+
+func WaitProxySettingsChangeReady(ctx context.Context, opt *Options, ready func()) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -29,15 +33,15 @@ func WaitProxySettingsChange(ctx context.Context, opt *Options) error {
 
 	switch {
 	case e.isGnome:
-		return waitGnomeProxySettingsChange(ctx, e)
+		return waitGnomeProxySettingsChange(ctx, e, ready)
 	case e.isKde:
-		return waitKDEProxySettingsChange(ctx, e)
+		return waitKDEProxySettingsChange(ctx, e, ready)
 	default:
 		return fmt.Errorf("不支持的桌面：%s", e.desktop)
 	}
 }
 
-func waitGnomeProxySettingsChange(ctx context.Context, e *Environment) error {
+func waitGnomeProxySettingsChange(ctx context.Context, e *Environment, ready func()) error {
 	monitorCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -70,6 +74,10 @@ func waitGnomeProxySettingsChange(ctx context.Context, e *Environment) error {
 		wg.Wait()
 		close(errCh)
 	}()
+
+	if ready != nil {
+		ready()
+	}
 
 	var firstErr error
 	for {
@@ -134,7 +142,7 @@ func waitGsettingsSchemaChange(ctx context.Context, e *Environment, schema strin
 	return fmt.Errorf("GNOME 代理设置监听已退出：%s", schema)
 }
 
-func waitKDEProxySettingsChange(ctx context.Context, e *Environment) error {
+func waitKDEProxySettingsChange(ctx context.Context, e *Environment, ready func()) error {
 	configPath, err := kdeProxyConfigPath(e)
 	if err != nil {
 		return err
@@ -159,6 +167,10 @@ func waitKDEProxySettingsChange(ctx context.Context, e *Environment) error {
 	mask := uint32(unix.IN_CLOSE_WRITE | unix.IN_MODIFY | unix.IN_MOVED_TO | unix.IN_CREATE | unix.IN_ATTRIB | unix.IN_DELETE_SELF | unix.IN_MOVE_SELF)
 	if _, err := unix.InotifyAddWatch(fd, watchPath, mask); err != nil {
 		return fmt.Errorf("监听 KDE 代理配置文件失败：%s: %w", watchPath, err)
+	}
+
+	if ready != nil {
+		ready()
 	}
 
 	buffer := make([]byte, unix.SizeofInotifyEvent+unix.NAME_MAX+1)
