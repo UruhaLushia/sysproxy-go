@@ -26,7 +26,7 @@ func WaitProxySettingsChangeReady(ctx context.Context, opt *Options, ready func(
 		return err
 	}
 
-	keys, err := openProxySettingsWatchKeys()
+	keys, err := openProxySettingsWatchKeys(opt)
 	if err != nil {
 		return err
 	}
@@ -91,7 +91,7 @@ func validateProxySettingsWatchTarget(opt *Options) error {
 	return nil
 }
 
-func openProxySettingsWatchKeys() ([]registry.Key, error) {
+func openProxySettingsWatchKeys(opt *Options) ([]registry.Key, error) {
 	paths := []string{
 		internetSettingsRegistryPath,
 		internetSettingsConnectionsRegistryPath,
@@ -99,7 +99,7 @@ func openProxySettingsWatchKeys() ([]registry.Key, error) {
 
 	keys := make([]registry.Key, 0, len(paths))
 	for _, path := range paths {
-		key, err := openCurrentUserKey(path, windows.KEY_NOTIFY)
+		key, err := openOptionsUserKey(path, windows.KEY_NOTIFY, opt)
 		if err != nil {
 			for _, opened := range keys {
 				opened.Close()

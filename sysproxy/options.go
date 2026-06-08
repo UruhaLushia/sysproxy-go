@@ -8,6 +8,7 @@ type Options struct {
 	PACURL           string
 	Device           string
 	OnlyActiveDevice bool
+	UserSID          string
 	PeerPID          int
 	PeerUID          uint32
 	PeerGID          uint32

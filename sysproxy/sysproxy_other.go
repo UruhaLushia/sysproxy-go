@@ -16,6 +16,6 @@ func SetPac(_ *Options) error {
 	return fmt.Errorf("不支持的操作系统")
 }
 
-func QueryProxySettings(_ *Options) (map[string]any, error) {
+func QueryProxySettings(_ *Options) (*ProxyConfig, error) {
 	return nil, fmt.Errorf("不支持的操作系统")
 }

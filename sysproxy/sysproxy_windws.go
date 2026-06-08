@@ -250,7 +250,7 @@ func QueryProxySettings(opt *Options) (*ProxyConfig, error) {
 		if err := validateRegistryTarget(opt); err != nil {
 			return nil, err
 		}
-		return queryProxySettingsRegistry()
+		return queryProxySettingsRegistry(opt)
 	}
 
 	options := [4]InternetPerConnOption{
@@ -289,7 +289,7 @@ func QueryProxySettings(opt *Options) (*ProxyConfig, error) {
 }
 
 func useRegistrySettings(opt *Options) bool {
-	return opt != nil && opt.UseRegistry
+	return opt != nil && (opt.UseRegistry || opt.UserSID != "")
 }
 
 func validateRegistryTarget(opt *Options) error {
@@ -304,7 +304,7 @@ func disableProxyRegistry(opt *Options) error {
 		return err
 	}
 
-	key, err := openCurrentUserKey(internetSettingsRegistryPath, registry.SET_VALUE)
+	key, err := openOptionsUserKey(internetSettingsRegistryPath, registry.SET_VALUE, opt)
 	if err != nil {
 		return err
 	}
@@ -331,7 +331,7 @@ func setProxyRegistry(opt *Options) error {
 		bypass = opt.Bypass
 	}
 	if proxy == "" || bypass == "" {
-		config, err := queryProxySettingsRegistry()
+		config, err := queryProxySettingsRegistry(opt)
 		if err != nil {
 			return err
 		}
@@ -344,7 +344,7 @@ func setProxyRegistry(opt *Options) error {
 		}
 	}
 
-	key, err := openCurrentUserKey(internetSettingsRegistryPath, registry.SET_VALUE)
+	key, err := openOptionsUserKey(internetSettingsRegistryPath, registry.SET_VALUE, opt)
 	if err != nil {
 		return err
 	}
@@ -375,14 +375,14 @@ func setPacRegistry(opt *Options) error {
 		pacUrl = opt.PACURL
 	}
 	if pacUrl == "" {
-		config, err := queryProxySettingsRegistry()
+		config, err := queryProxySettingsRegistry(opt)
 		if err != nil {
 			return err
 		}
 		pacUrl = config.PAC.URL
 	}
 
-	key, err := openCurrentUserKey(internetSettingsRegistryPath, registry.SET_VALUE)
+	key, err := openOptionsUserKey(internetSettingsRegistryPath, registry.SET_VALUE, opt)
 	if err != nil {
 		return err
 	}
@@ -400,8 +400,8 @@ func setPacRegistry(opt *Options) error {
 	return key.SetStringValue("AutoConfigURL", pacUrl)
 }
 
-func queryProxySettingsRegistry() (*ProxyConfig, error) {
-	key, err := openCurrentUserKey(internetSettingsRegistryPath, registry.READ)
+func queryProxySettingsRegistry(opt *Options) (*ProxyConfig, error) {
+	key, err := openOptionsUserKey(internetSettingsRegistryPath, registry.READ, opt)
 	if err != nil {
 		return nil, err
 	}

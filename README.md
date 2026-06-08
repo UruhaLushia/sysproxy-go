@@ -73,6 +73,30 @@ sysproxy guard --url http://127.0.0.1:7890/proxy.pac
 
 `--device` 的含义由平台决定：Windows 为连接名称，macOS 为 `networksetup` 中的网络服务名称。Windows 注册表模式不支持指定网络设备。
 
+### 目标用户选项
+
+Windows:
+
+```text
+    --user string   指定系统用户
+    --sid string    指定用户 SID
+    --pid int       指定会话进程 PID
+```
+
+Linux:
+
+```text
+    --user string       指定系统用户
+    --pid int           指定会话进程 PID
+    --uid uint32        指定用户 UID
+    --gid uint32        指定用户 GID
+    --env stringArray   指定会话环境变量 KEY=VALUE，可重复
+```
+
+Linux 下 `--user` 会按用户名解析 UID/GID，并尽量从该用户的图形会话进程恢复 `XDG_CURRENT_DESKTOP`、`XDG_RUNTIME_DIR`、`DBUS_SESSION_BUS_ADDRESS` 等环境；也可以直接传 `--pid` 在命令启动时从该进程恢复会话环境，或传 `--uid`、`--gid`、`--env`。
+
+Windows 下 `--user` 会解析为用户 SID；`--sid` 可直接指定 SID，`--pid` 会在命令启动时从进程令牌解析用户 SID。指定 `--user`、`--sid` 或 `--pid` 时会按该用户的 `HKEY_USERS\<sid>` 代理注册表项读写，不需要额外指定 `--registry`。
+
 ## Go API
 
 ```go
@@ -110,6 +134,7 @@ type Options struct {
 	PACURL           string
 	Device           string
 	OnlyActiveDevice bool
+	UserSID          string
 	PeerPID          int
 	PeerUID          uint32
 	PeerGID          uint32
@@ -119,7 +144,7 @@ type Options struct {
 }
 ```
 
-Linux 下如果代理操作需要使用调用方会话环境，可以传入 `Environment`，或传入 `PeerPID`、`PeerUID`、`PeerGID` 让库从调用方进程恢复 `XDG_CURRENT_DESKTOP`、`XDG_RUNTIME_DIR`、`DBUS_SESSION_BUS_ADDRESS` 等会话变量。
+可使用 `sysproxy.OptionsForUser(name)` 或 `sysproxy.OptionsForProcess(pid)` 生成目标参数。Linux 下如果代理操作需要使用调用方会话环境，可以传入 `Environment`，或传入 `PeerPID`、`PeerUID`、`PeerGID` 让库从调用方进程恢复 `XDG_CURRENT_DESKTOP`、`XDG_RUNTIME_DIR`、`DBUS_SESSION_BUS_ADDRESS` 等会话变量。Windows 下可传入 `UserSID` 直接指定目标用户注册表。
 
 ## 平台行为
 
@@ -136,6 +161,12 @@ HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings
 ```
 
 注册表模式适合只需要修改当前用户代理配置、且不需要指定连接名称的场景。
+
+指定 `--user`、`--sid` 或 `--pid` 时会直接读写目标用户的：
+
+```text
+HKEY_USERS\<sid>\Software\Microsoft\Windows\CurrentVersion\Internet Settings
+```
 
 ### Linux
 

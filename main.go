@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"reflect"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +28,12 @@ var (
 	onlyActiveDevice bool
 	multiThread      bool
 	useRegistry      bool
+	targetUser       string
+	targetSID        string
+	peerPID          int
+	peerUID          uint32
+	peerGID          uint32
+	peerEnv          []string
 )
 
 var cmd = &cobra.Command{
@@ -39,14 +46,14 @@ var proxyCmd = &cobra.Command{
 	Short: "设置系统代理",
 	Run: func(cmd *cobra.Command, args []string) {
 		t := time.Now()
-		err := sysproxy.SetProxy(&sysproxy.Options{
-			Proxy:            server,
-			Bypass:           bypass,
-			Device:           device,
-			OnlyActiveDevice: onlyActiveDevice,
-			Concurrent:       sysproxy.Bool(multiThread),
-			UseRegistry:      useRegistry,
-		})
+		opts, err := commandOptions()
+		if err != nil {
+			fmt.Println("解析命令参数失败：", err)
+			return
+		}
+		opts.Proxy = server
+		opts.Bypass = bypass
+		err = sysproxy.SetProxy(opts)
 		if err != nil {
 			fmt.Println("设置代理失败：", err)
 			return
@@ -60,13 +67,13 @@ var pacCmd = &cobra.Command{
 	Short: "设置 PAC 代理",
 	Run: func(cmd *cobra.Command, args []string) {
 		t := time.Now()
-		err := sysproxy.SetPac(&sysproxy.Options{
-			PACURL:           pacUrl,
-			Device:           device,
-			OnlyActiveDevice: onlyActiveDevice,
-			Concurrent:       sysproxy.Bool(multiThread),
-			UseRegistry:      useRegistry,
-		})
+		opts, err := commandOptions()
+		if err != nil {
+			fmt.Println("解析命令参数失败：", err)
+			return
+		}
+		opts.PACURL = pacUrl
+		err = sysproxy.SetPac(opts)
 		if err != nil {
 			fmt.Println("设置 PAC 代理失败：", err)
 			return
@@ -80,12 +87,12 @@ var disableCmd = &cobra.Command{
 	Short: "取消代理设置",
 	Run: func(cmd *cobra.Command, args []string) {
 		t := time.Now()
-		err := sysproxy.DisableProxy(&sysproxy.Options{
-			Device:           device,
-			OnlyActiveDevice: onlyActiveDevice,
-			Concurrent:       sysproxy.Bool(multiThread),
-			UseRegistry:      useRegistry,
-		})
+		opts, err := commandOptions()
+		if err != nil {
+			fmt.Println("解析命令参数失败：", err)
+			return
+		}
+		err = sysproxy.DisableProxy(opts)
 		if err != nil {
 			fmt.Println("取消代理设置失败：", err)
 			return
@@ -98,11 +105,12 @@ var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "查看当前代理设置",
 	Run: func(cmd *cobra.Command, args []string) {
-		status, err := sysproxy.QueryProxySettings(&sysproxy.Options{
-			Device:           device,
-			OnlyActiveDevice: onlyActiveDevice,
-			UseRegistry:      useRegistry,
-		})
+		opts, err := commandOptions()
+		if err != nil {
+			fmt.Println("解析命令参数失败：", err)
+			return
+		}
+		status, err := sysproxy.QueryProxySettings(opts)
 		if err != nil {
 			fmt.Println("查询代理设置失败：", err)
 			return
@@ -123,10 +131,10 @@ var watchCmd = &cobra.Command{
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
 
-		opts := &sysproxy.Options{
-			Device:           device,
-			OnlyActiveDevice: onlyActiveDevice,
-			UseRegistry:      useRegistry,
+		opts, err := commandOptions()
+		if err != nil {
+			fmt.Println("解析命令参数失败：", err)
+			return
 		}
 
 		for {
@@ -149,21 +157,15 @@ var guardCmd = &cobra.Command{
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
 
-		opts := &sysproxy.Options{
-			Proxy:            server,
-			Bypass:           bypass,
-			PACURL:           pacUrl,
-			Device:           device,
-			OnlyActiveDevice: onlyActiveDevice,
-			Concurrent:       sysproxy.Bool(multiThread),
-			UseRegistry:      useRegistry,
+		opts, err := commandOptions()
+		if err != nil {
+			fmt.Println("解析命令参数失败：", err)
+			return
 		}
-
-		watchOpts := &sysproxy.Options{
-			Device:           device,
-			OnlyActiveDevice: onlyActiveDevice,
-			UseRegistry:      useRegistry,
-		}
+		opts.Proxy = server
+		opts.Bypass = bypass
+		opts.PACURL = pacUrl
+		watchOpts := cloneOptions(opts)
 
 		var mode guardMode
 		if pacUrl != "" {
@@ -376,6 +378,104 @@ func fillGuardApplyOptions(mode guardMode, opts *sysproxy.Options, expected guar
 	}
 }
 
+func commandOptions() (*sysproxy.Options, error) {
+	opts := &sysproxy.Options{
+		Device:           device,
+		OnlyActiveDevice: onlyActiveDevice,
+		Concurrent:       sysproxy.Bool(multiThread),
+		UseRegistry:      useRegistry,
+	}
+	if err := applyTargetOptions(opts); err != nil {
+		return nil, err
+	}
+	return opts, nil
+}
+
+func applyTargetOptions(opts *sysproxy.Options) error {
+	switch runtime.GOOS {
+	case "windows":
+		return applyWindowsTargetOptions(opts)
+	case "linux":
+		return applyLinuxTargetOptions(opts)
+	default:
+		return nil
+	}
+}
+
+func applyWindowsTargetOptions(opts *sysproxy.Options) error {
+	if targetUser != "" {
+		userOpts, err := sysproxy.OptionsForUser(targetUser)
+		if err != nil {
+			return err
+		}
+		mergeTargetOptions(opts, userOpts)
+	}
+	if peerPID > 0 {
+		processOpts, err := sysproxy.OptionsForProcess(peerPID)
+		if err != nil {
+			return err
+		}
+		mergeTargetOptions(opts, processOpts)
+	}
+	if targetSID != "" {
+		opts.UserSID = targetSID
+	}
+	return nil
+}
+
+func applyLinuxTargetOptions(opts *sysproxy.Options) error {
+	if targetUser != "" {
+		userOpts, err := sysproxy.OptionsForUser(targetUser)
+		if err != nil {
+			return err
+		}
+		mergeTargetOptions(opts, userOpts)
+	}
+	if peerPID > 0 {
+		processOpts, err := sysproxy.OptionsForProcess(peerPID)
+		if err != nil {
+			return err
+		}
+		mergeTargetOptions(opts, processOpts)
+	}
+	if peerUID != 0 {
+		opts.PeerUID = peerUID
+	}
+	if peerGID != 0 {
+		opts.PeerGID = peerGID
+	}
+	if len(peerEnv) > 0 {
+		for _, item := range peerEnv {
+			if !strings.Contains(item, "=") {
+				return fmt.Errorf("--env 需要 KEY=VALUE：%s", item)
+			}
+		}
+		opts.Environment = append([]string(nil), peerEnv...)
+	}
+	return nil
+}
+
+func mergeTargetOptions(dst, src *sysproxy.Options) {
+	if dst == nil || src == nil {
+		return
+	}
+	if src.UserSID != "" {
+		dst.UserSID = src.UserSID
+	}
+	if src.PeerPID != 0 {
+		dst.PeerPID = src.PeerPID
+	}
+	if src.PeerUID != 0 {
+		dst.PeerUID = src.PeerUID
+	}
+	if src.PeerGID != 0 {
+		dst.PeerGID = src.PeerGID
+	}
+	if len(src.Environment) > 0 {
+		dst.Environment = append([]string(nil), src.Environment...)
+	}
+}
+
 func cloneOptions(opt *sysproxy.Options) *sysproxy.Options {
 	if opt == nil {
 		return &sysproxy.Options{}
@@ -424,6 +524,7 @@ func init() {
 	cmd.PersistentFlags().StringVarP(&device, "device", "d", "", "指定网络设备")
 	cmd.PersistentFlags().BoolVar(&multiThread, "multithread", sysproxy.DefaultConcurrent(), "启用多线程并发设置；macOS 默认开启，Windows 默认关闭")
 	cmd.PersistentFlags().BoolVar(&useRegistry, "registry", false, "Windows 使用注册表设置/查询代理，不调用 win32 API")
+	registerTargetFlags()
 
 	proxyCmd.Flags().StringVarP(&server, "server", "s", "", "代理服务器地址")
 	proxyCmd.Flags().StringVarP(&bypass, "bypass", "b", "", "绕过地址")
@@ -435,6 +536,21 @@ func init() {
 	guardCmd.Flags().StringVarP(&pacUrl, "url", "u", "", "pac 地址")
 
 	serverCmd.Flags().StringVarP(&listen, "listen", "l", "/tmp/sparkle-helper.sock", "监听地址")
+}
+
+func registerTargetFlags() {
+	switch runtime.GOOS {
+	case "windows":
+		cmd.PersistentFlags().StringVar(&targetUser, "user", "", "指定系统用户")
+		cmd.PersistentFlags().StringVar(&targetSID, "sid", "", "Windows 指定用户 SID")
+		cmd.PersistentFlags().IntVar(&peerPID, "pid", 0, "指定会话进程 PID")
+	case "linux":
+		cmd.PersistentFlags().StringVar(&targetUser, "user", "", "指定系统用户")
+		cmd.PersistentFlags().IntVar(&peerPID, "pid", 0, "指定会话进程 PID")
+		cmd.PersistentFlags().Uint32Var(&peerUID, "uid", 0, "Linux 指定用户 UID")
+		cmd.PersistentFlags().Uint32Var(&peerGID, "gid", 0, "Linux 指定用户 GID")
+		cmd.PersistentFlags().StringArrayVar(&peerEnv, "env", nil, "Linux 指定会话环境变量 KEY=VALUE，可重复")
+	}
 }
 
 func main() {

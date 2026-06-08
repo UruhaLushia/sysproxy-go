@@ -31,9 +31,9 @@ func newLinuxExecContext(opt *Options) (*linuxExecContext, error) {
 	if opt != nil && len(opt.Environment) > 0 {
 		envMap = mergeEnvMaps(sessionBaseEnv(), envSliceToMap(opt.Environment))
 		ctx.envMap = envMap
-		if opt.PeerUID != 0 || opt.PeerGID != 0 {
-			ctx.uid = opt.PeerUID
-			ctx.gid = opt.PeerGID
+		if uid, gid, ok := resolveLinuxPeerCredentials(opt); ok {
+			ctx.uid = uid
+			ctx.gid = gid
 			ctx.useCredential = os.Geteuid() == 0
 		}
 		ensureLinuxSessionEnv(envMap, ctx.uid)
@@ -45,14 +45,52 @@ func newLinuxExecContext(opt *Options) (*linuxExecContext, error) {
 
 		envMap = mergeEnvMaps(sessionBaseEnv(), peerEnv)
 		ctx.envMap = envMap
-		ctx.uid = opt.PeerUID
-		ctx.gid = opt.PeerGID
+		if uid, gid, ok := resolveLinuxPeerCredentials(opt); ok {
+			ctx.uid = uid
+			ctx.gid = gid
+		}
 		ctx.useCredential = os.Geteuid() == 0
+		ensureLinuxSessionEnv(envMap, ctx.uid)
+	} else if opt != nil && (opt.PeerUID != 0 || opt.PeerGID != 0) {
+		if uid, gid, ok := resolveLinuxPeerCredentials(opt); ok {
+			ctx.uid = uid
+			ctx.gid = gid
+			ctx.useCredential = os.Geteuid() == 0
+		}
+		if sessionEnv, ok := findLinuxUserSessionEnv(ctx.uid); ok {
+			envMap = mergeEnvMaps(sessionBaseEnv(), sessionEnv)
+		} else {
+			envMap = mergeEnvMaps(sessionBaseEnv(), envMap)
+		}
+		ctx.envMap = envMap
 		ensureLinuxSessionEnv(envMap, ctx.uid)
 	}
 
 	ctx.env = envMapToSlice(ctx.envMap)
 	return ctx, nil
+}
+
+func resolveLinuxPeerCredentials(opt *Options) (uint32, uint32, bool) {
+	if opt == nil {
+		return 0, 0, false
+	}
+
+	uid := opt.PeerUID
+	gid := opt.PeerGID
+	ok := uid != 0 || gid != 0
+	if opt.PeerPID > 0 && (uid == 0 || gid == 0) {
+		procUID, procGID, err := readProcessOwner(opt.PeerPID)
+		if err == nil {
+			if uid == 0 {
+				uid = procUID
+			}
+			if gid == 0 {
+				gid = procGID
+			}
+			ok = true
+		}
+	}
+	return uid, gid, ok
 }
 
 func currentProcessEnv() map[string]string {
