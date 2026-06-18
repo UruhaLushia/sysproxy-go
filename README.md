@@ -89,6 +89,28 @@ sysproxy guard --url http://127.0.0.1:7890/proxy.pac
 
 `--device` 的含义由平台决定：Windows 为连接名称，macOS 为 `networksetup` 中的网络服务名称。Windows 注册表模式不支持指定网络设备。
 
+### 可选 HTTP 服务
+
+HTTP 服务默认不编译，需要显式启用 build tag：
+
+```bash
+go build -tags sysproxy_server
+```
+
+启动 TCP 服务：
+
+```bash
+sysproxy server --network tcp --listen 127.0.0.1:9090
+```
+
+启动 Unix Domain Socket 服务：
+
+```bash
+sysproxy server --network unix --listen /tmp/sparkle-helper.sock
+```
+
+服务提供 `/ping`、`/status`、`/proxy`、`/pac`、`/disable` 和 SSE `/events`。`/events` 会返回 `text/event-stream`，在系统代理变更时推送 `update` 事件。
+
 ### 目标用户选项
 
 Windows:
