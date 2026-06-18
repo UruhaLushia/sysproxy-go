@@ -26,6 +26,12 @@ go get github.com/UruhaLushia/sysproxy-go
 sysproxy proxy --server 127.0.0.1:7890 --bypass "localhost,127.0.0.1"
 ```
 
+设置普通代理，并在设置系统代理前等待代理服务端口可连接：
+
+```bash
+sysproxy proxy --server 127.0.0.1:7890 --wait-server
+```
+
 设置 PAC 代理：
 
 ```bash
@@ -70,6 +76,16 @@ sysproxy guard --url http://127.0.0.1:7890/proxy.pac
     --multithread          启用并发设置，macOS 默认开启，Windows 默认关闭
     --registry             Windows 使用注册表设置或查询当前用户代理
 ```
+
+### 代理选项
+
+`proxy` 和普通代理模式的 `guard` 支持：
+
+```text
+    --wait-server   设置系统代理前一直等待代理服务器可用
+```
+
+`--wait-server` 会在写入系统代理前轮询 `--server` 对应的 TCP 地址，直到端口可连接或进程被取消。未设置时保持原有行为，不等待。
 
 `--device` 的含义由平台决定：Windows 为连接名称，macOS 为 `networksetup` 中的网络服务名称。Windows 注册表模式不支持指定网络设备。
 

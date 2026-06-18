@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"reflect"
@@ -19,9 +20,10 @@ import (
 )
 
 var (
-	server string
-	bypass string
-	pacUrl string
+	server     string
+	bypass     string
+	pacUrl     string
+	waitServer bool
 
 	listen           string
 	device           string
@@ -34,6 +36,12 @@ var (
 	peerUID          uint32
 	peerGID          uint32
 	peerEnv          []string
+)
+
+const (
+	waitServerDialTimeout = 500 * time.Millisecond
+	waitServerInitialPoll = time.Second
+	waitServerMaxPoll     = 30 * time.Second
 )
 
 var cmd = &cobra.Command{
@@ -53,8 +61,19 @@ var proxyCmd = &cobra.Command{
 		}
 		opts.Proxy = server
 		opts.Bypass = bypass
-		err = sysproxy.SetProxy(opts)
+
+		ctx := context.Background()
+		if waitServer {
+			var stop context.CancelFunc
+			ctx, stop = signal.NotifyContext(ctx, os.Interrupt)
+			defer stop()
+		}
+
+		err = setProxy(ctx, opts)
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				return
+			}
 			fmt.Println("设置代理失败：", err)
 			return
 		}
@@ -174,7 +193,10 @@ var guardCmd = &cobra.Command{
 			mode = guardModeProxy
 		}
 
-		if err := applyGuardSettings(mode, opts); err != nil {
+		if err := applyGuardSettings(ctx, mode, opts); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return
+			}
 			fmt.Println("初始设置代理失败：", err)
 			return
 		}
@@ -206,7 +228,10 @@ var guardCmd = &cobra.Command{
 
 			if !reflect.DeepEqual(expected, current) {
 				fmt.Println("检测到代理设置变更，正在恢复...")
-				if err := applyGuardSettings(mode, opts); err != nil {
+				if err := applyGuardSettings(ctx, mode, opts); err != nil {
+					if errors.Is(err, context.Canceled) {
+						return
+					}
 					fmt.Println("恢复代理设置失败：", err)
 					if !waitGuardNextChange(ctx, nil, watchErr) {
 						return
@@ -314,15 +339,84 @@ func waitGuardNextChange(ctx context.Context, cancelWatch context.CancelFunc, wa
 	}
 }
 
-func applyGuardSettings(mode guardMode, opts *sysproxy.Options) error {
+func applyGuardSettings(ctx context.Context, mode guardMode, opts *sysproxy.Options) error {
 	switch mode {
 	case guardModeProxy:
-		return sysproxy.SetProxy(opts)
+		return setProxy(ctx, opts)
 	case guardModePAC:
 		return sysproxy.SetPac(opts)
 	default:
 		return fmt.Errorf("未知守护模式：%s", mode)
 	}
+}
+
+func setProxy(ctx context.Context, opts *sysproxy.Options) error {
+	if waitServer {
+		if err := waitProxyServerAvailable(ctx, opts.Proxy); err != nil {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return sysproxy.SetProxy(opts)
+}
+
+func waitProxyServerAvailable(ctx context.Context, proxy string) error {
+	addr, err := proxyTCPAddress(proxy)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("等待代理服务器可用：%s\n", addr)
+
+	dialer := net.Dialer{Timeout: waitServerDialTimeout}
+	timer := time.NewTimer(0)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	defer timer.Stop()
+
+	nextPoll := time.Duration(0)
+	for {
+		if nextPoll > 0 {
+			timer.Reset(nextPoll)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-timer.C:
+			}
+		}
+
+		conn, err := dialer.DialContext(ctx, "tcp", addr)
+		if err == nil {
+			_ = conn.Close()
+			return nil
+		}
+
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		if nextPoll == 0 {
+			nextPoll = waitServerInitialPoll
+		} else {
+			nextPoll *= 2
+			if nextPoll > waitServerMaxPoll {
+				nextPoll = waitServerMaxPoll
+			}
+		}
+	}
+}
+
+func proxyTCPAddress(proxy string) (string, error) {
+	proxy = strings.TrimSpace(proxy)
+	if proxy == "" {
+		return "", fmt.Errorf("--wait-server 需要同时指定 --server")
+	}
+	if _, _, err := net.SplitHostPort(proxy); err == nil {
+		return proxy, nil
+	}
+	return "", fmt.Errorf("invalid proxy address: %s", proxy)
 }
 
 func queryGuardSnapshot(mode guardMode, opts *sysproxy.Options) (guardSnapshot, error) {
@@ -528,12 +622,14 @@ func init() {
 
 	proxyCmd.Flags().StringVarP(&server, "server", "s", "", "代理服务器地址")
 	proxyCmd.Flags().StringVarP(&bypass, "bypass", "b", "", "绕过地址")
+	proxyCmd.Flags().BoolVar(&waitServer, "wait-server", false, "设置系统代理前一直等待代理服务器可用")
 
 	pacCmd.Flags().StringVarP(&pacUrl, "url", "u", "", "pac 地址")
 
 	guardCmd.Flags().StringVarP(&server, "server", "s", "", "代理服务器地址")
 	guardCmd.Flags().StringVarP(&bypass, "bypass", "b", "", "绕过地址")
 	guardCmd.Flags().StringVarP(&pacUrl, "url", "u", "", "pac 地址")
+	guardCmd.Flags().BoolVar(&waitServer, "wait-server", false, "设置系统代理前一直等待代理服务器可用")
 
 	serverCmd.Flags().StringVarP(&listen, "listen", "l", "/tmp/sparkle-helper.sock", "监听地址")
 }
