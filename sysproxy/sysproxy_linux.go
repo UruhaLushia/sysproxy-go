@@ -266,9 +266,6 @@ func queryKDESettings(e *Environment) (*ProxyConfig, error) {
 	}
 
 	group := "Proxy Settings"
-	if !e.isKde6 {
-		group = "Proxy"
-	}
 
 	keys := map[string]string{
 		"ProxyType":           "",
@@ -319,9 +316,6 @@ func setKDEProxy(e *Environment, config *ProxyConfig) error {
 	}
 
 	group := "Proxy Settings"
-	if !e.isKde6 {
-		group = "Proxy"
-	}
 
 	if err := execKDEConfig(e, cmd, "ProxyType", "1", group); err != nil {
 		return err
@@ -361,9 +355,6 @@ func setKDEPac(e *Environment, config *ProxyConfig) error {
 	}
 
 	group := "Proxy Settings"
-	if !e.isKde6 {
-		group = "Proxy"
-	}
 
 	if err := execKDEConfig(e, cmd, "ProxyType", "2", group); err != nil {
 		return err
@@ -382,9 +373,6 @@ func clearKDEProxy(e *Environment) error {
 	}
 
 	group := "Proxy Settings"
-	if !e.isKde6 {
-		group = "Proxy"
-	}
 
 	if err := execKDEConfig(e, cmd, "ProxyType", "0", group); err != nil {
 		return err
