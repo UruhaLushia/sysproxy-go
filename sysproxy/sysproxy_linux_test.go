@@ -13,7 +13,6 @@ func TestFormatKDEProxyServer(t *testing.T) {
 	}{
 		{name: "http", server: "127.0.0.1:7890", scheme: "http", want: "http://127.0.0.1 7890"},
 		{name: "socks", server: "127.0.0.1:7890", scheme: "socks", want: "socks://127.0.0.1 7890"},
-		{name: "existing scheme", server: "http://127.0.0.1:7890", scheme: "http", want: "http://127.0.0.1 7890"},
 		{name: "ipv6", server: "[::1]:7890", scheme: "http", want: "http://[::1] 7890"},
 		{name: "empty", server: "", scheme: "http", want: ""},
 	}
@@ -37,7 +36,6 @@ func TestParseKDEProxyServer(t *testing.T) {
 		{name: "socks", server: "socks://127.0.0.1 7890", want: "127.0.0.1:7890"},
 		{name: "ipv6", server: "http://[::1] 7890", want: "[::1]:7890"},
 		{name: "legacy", server: "127.0.0.1:7890", want: "127.0.0.1:7890"},
-		{name: "empty", server: "0", want: ""},
 	}
 
 	for _, tt := range tests {

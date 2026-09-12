@@ -266,6 +266,9 @@ func queryKDESettings(e *Environment) (*ProxyConfig, error) {
 	}
 
 	group := "Proxy Settings"
+	if !e.isKde6 {
+		group = "Proxy"
+	}
 
 	keys := map[string]string{
 		"ProxyType":           "",
@@ -316,6 +319,9 @@ func setKDEProxy(e *Environment, config *ProxyConfig) error {
 	}
 
 	group := "Proxy Settings"
+	if !e.isKde6 {
+		group = "Proxy"
+	}
 
 	if err := execKDEConfig(e, cmd, "ProxyType", "1", group); err != nil {
 		return err
@@ -355,6 +361,9 @@ func setKDEPac(e *Environment, config *ProxyConfig) error {
 	}
 
 	group := "Proxy Settings"
+	if !e.isKde6 {
+		group = "Proxy"
+	}
 
 	if err := execKDEConfig(e, cmd, "ProxyType", "2", group); err != nil {
 		return err
@@ -372,7 +381,12 @@ func clearKDEProxy(e *Environment) error {
 		cmd = "kwriteconfig6"
 	}
 
-	if err := execKDEConfig(e, cmd, "ProxyType", "0", "Proxy Settings"); err != nil {
+	group := "Proxy Settings"
+	if !e.isKde6 {
+		group = "Proxy"
+	}
+
+	if err := execKDEConfig(e, cmd, "ProxyType", "0", group); err != nil {
 		return err
 	}
 	return notifyKDEProxyChange(e)
@@ -384,7 +398,7 @@ func execKDEConfig(e *Environment, cmd, key, value, group string) error {
 }
 
 func formatKDEProxyServer(server, scheme string) string {
-	addr := ParseServerString(stripProxyScheme(server))
+	addr := ParseServerString(server)
 	if addr.host == "" || addr.port == "" {
 		return ""
 	}
@@ -392,39 +406,12 @@ func formatKDEProxyServer(server, scheme string) string {
 }
 
 func parseKDEProxyServer(server string) string {
-	server = stripProxyScheme(cleanOutput(server))
-	if server == "" || server == "0" {
-		return ""
-	}
-	if host, port, ok := strings.Cut(server, " "); ok {
-		host = strings.TrimSpace(host)
-		port = cleanOutput(port)
-		if host == "" || port == "" || port == "0" {
-			return ""
-		}
-		return host + ":" + port
-	}
-	return server
-}
-
-func stripProxyScheme(server string) string {
-	if index := strings.Index(server, "://"); index >= 0 {
-		return server[index+3:]
-	}
-	return server
+	server = strings.TrimPrefix(server, "http://")
+	server = strings.TrimPrefix(server, "socks://")
+	return strings.ReplaceAll(server, " ", ":")
 }
 
 func notifyKDEProxyChange(e *Environment) error {
-	if err := execAsCurrentUser(
-		e.ctx,
-		"dbus-send",
-		"--session",
-		"--type=signal",
-		"/KIO/Scheduler",
-		"org.kde.KIO.Scheduler.reparseSlaveConfiguration",
-		"string:",
-	).Run(); err != nil {
-		return fmt.Errorf("无法通知 KDE 重新加载代理设置：%w", err)
-	}
-	return nil
+	args := []string{"--session", "--type=signal", "/KIO/Scheduler", "org.kde.KIO.Scheduler.reparseSlaveConfiguration", "string:"}
+	return execAsCurrentUser(e.ctx, "dbus-send", args...).Run()
 }
