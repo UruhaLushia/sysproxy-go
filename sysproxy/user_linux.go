@@ -71,20 +71,19 @@ func parseLinuxUserID(value, name string) (uint32, error) {
 }
 
 func findLinuxUserSessionEnv(uid uint32) (map[string]string, bool) {
+	var best map[string]string
+	bestScore := 0
 	if uint32(os.Getuid()) == uid {
 		envMap := currentProcessEnv()
-		if scoreLinuxSessionEnv(envMap) > 0 {
-			return envMap, true
-		}
+		best = envMap
+		bestScore = scoreLinuxSessionEnv(envMap)
 	}
 
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
-		return nil, false
+		return best, bestScore > 0
 	}
 
-	var best map[string]string
-	bestScore := 0
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue

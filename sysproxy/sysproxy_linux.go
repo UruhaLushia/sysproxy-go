@@ -293,10 +293,10 @@ func queryKDESettings(e *Environment) (*ProxyConfig, error) {
 	config.Proxy.Enable = keys["ProxyType"] == "1"
 	config.Proxy.SameForAll = keys["UseSameProxy"] == "true"
 	config.Proxy.Servers = map[string]string{
-		"http_server":  strings.ReplaceAll(keys["httpProxy"], " ", ":"),
-		"https_server": strings.ReplaceAll(keys["httpsProxy"], " ", ":"),
-		"socks_server": strings.ReplaceAll(keys["socksProxy"], " ", ":"),
-		"ftp_server":   strings.ReplaceAll(keys["ftpProxy"], " ", ":"),
+		"http_server":  parseKDEProxyServer(keys["httpProxy"]),
+		"https_server": parseKDEProxyServer(keys["httpsProxy"]),
+		"socks_server": parseKDEProxyServer(keys["socksProxy"]),
+		"ftp_server":   parseKDEProxyServer(keys["ftpProxy"]),
 	}
 
 	for key, value := range config.Proxy.Servers {
@@ -328,10 +328,10 @@ func setKDEProxy(e *Environment, config *ProxyConfig) error {
 	}
 
 	servers := map[string]string{
-		"httpProxy":  config.Proxy.Servers["http_server"],
-		"httpsProxy": config.Proxy.Servers["https_server"],
-		"socksProxy": config.Proxy.Servers["socks_server"],
-		"ftpProxy":   config.Proxy.Servers["ftp_server"],
+		"httpProxy":  formatKDEProxyServer(config.Proxy.Servers["http_server"], "http"),
+		"httpsProxy": formatKDEProxyServer(config.Proxy.Servers["https_server"], "http"),
+		"socksProxy": formatKDEProxyServer(config.Proxy.Servers["socks_server"], "socks"),
+		"ftpProxy":   formatKDEProxyServer(config.Proxy.Servers["ftp_server"], "http"),
 	}
 
 	for key, value := range servers {
@@ -348,7 +348,10 @@ func setKDEProxy(e *Environment, config *ProxyConfig) error {
 	if config.Proxy.SameForAll {
 		sameProxy = "true"
 	}
-	return execKDEConfig(e, cmd, "UseSameProxy", sameProxy, group)
+	if err := execKDEConfig(e, cmd, "UseSameProxy", sameProxy, group); err != nil {
+		return err
+	}
+	return notifyKDEProxyChange(e)
 }
 
 func setKDEPac(e *Environment, config *ProxyConfig) error {
@@ -366,7 +369,10 @@ func setKDEPac(e *Environment, config *ProxyConfig) error {
 		return err
 	}
 
-	return execKDEConfig(e, cmd, "Proxy Config Script", config.PAC.URL, group)
+	if err := execKDEConfig(e, cmd, "Proxy Config Script", config.PAC.URL, group); err != nil {
+		return err
+	}
+	return notifyKDEProxyChange(e)
 }
 
 func clearKDEProxy(e *Environment) error {
@@ -380,10 +386,32 @@ func clearKDEProxy(e *Environment) error {
 		group = "Proxy"
 	}
 
-	return execKDEConfig(e, cmd, "ProxyType", "0", group)
+	if err := execKDEConfig(e, cmd, "ProxyType", "0", group); err != nil {
+		return err
+	}
+	return notifyKDEProxyChange(e)
 }
 
 func execKDEConfig(e *Environment, cmd, key, value, group string) error {
 	args := []string{"--file", "kioslaverc", "--group", group, "--key", key, value}
 	return execAsCurrentUser(e.ctx, cmd, args...).Run()
+}
+
+func formatKDEProxyServer(server, scheme string) string {
+	addr := ParseServerString(server)
+	if addr.host == "" || addr.port == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s://%s %s", scheme, addr.host, addr.port)
+}
+
+func parseKDEProxyServer(server string) string {
+	server = strings.TrimPrefix(server, "http://")
+	server = strings.TrimPrefix(server, "socks://")
+	return strings.ReplaceAll(server, " ", ":")
+}
+
+func notifyKDEProxyChange(e *Environment) error {
+	args := []string{"--session", "--type=signal", "/KIO/Scheduler", "org.kde.KIO.Scheduler.reparseSlaveConfiguration", "string:"}
+	return execAsCurrentUser(e.ctx, "dbus-send", args...).Run()
 }

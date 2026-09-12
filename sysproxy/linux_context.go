@@ -146,6 +146,15 @@ func envMapToSlice(envMap map[string]string) []string {
 }
 
 func ensureLinuxSessionEnv(envMap map[string]string, uid uint32) {
+	if envMap["XDG_CURRENT_DESKTOP"] == "" {
+		if sessionEnv, ok := findLinuxUserSessionEnv(uid); ok {
+			for key, value := range sessionEnv {
+				if envMap[key] == "" {
+					envMap[key] = value
+				}
+			}
+		}
+	}
 	if envMap["XDG_RUNTIME_DIR"] == "" {
 		envMap["XDG_RUNTIME_DIR"] = filepath.Join("/run/user", fmt.Sprintf("%d", uid))
 	}
